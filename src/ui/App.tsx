@@ -26,7 +26,7 @@ export default function App() {
   const panel = useGame((s) => s.panel);
   const dialogue = useGame((s) => s.dialogue);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [booted, setBooted] = useState(false);
+  const [fatal, setFatal] = useState<string | null>(null);
 
   /* ------------------------------------------------------------- lifecycle */
 
@@ -54,6 +54,14 @@ export default function App() {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const st = useGame.getState();
+    // WebGL2 capability check up front so a failure is legible instead of a black screen.
+    try {
+      const probe = document.createElement('canvas').getContext('webgl2');
+      if (!probe) throw new Error('This browser does not support WebGL2.');
+    } catch (e: any) {
+      setFatal(e?.message ?? 'WebGL2 is unavailable.');
+      return;
+    }
     // World already built (returning from the title screen): just start a run.
     if (game.started) {
       if (slot != null) await game.loadGame(slot); else game.newGame();
@@ -69,7 +77,15 @@ export default function App() {
     st.setScreen('loading');
     game.audio.init();
     game.audio.setVolumes(st.settings.music, st.settings.sfx);
-    await game.init(canvas, st.settings.quality);
+    try {
+      await game.init(canvas, st.settings.quality);
+    } catch (e: any) {
+      console.error(e);
+      setFatal(e?.message ?? 'The world could not be built.');
+      st.setScreen('menu');
+      st.setLoading({ active: false, progress: 0, text: '' });
+      return;
+    }
     input.sensitivity = st.settings.sensitivity;
     input.invertY = st.settings.invertY;
     input.attach(canvas, (locked) => {
@@ -90,9 +106,8 @@ export default function App() {
     input.enabled = true;
     game.start();
     game.refreshQuestUI();
-    setBooted(true);
-    setTimeout(() => useGame.getState().setHint('WASD to move · LMB light · RMB heavy/block · F to parry · E to interact'), 900);
-    setTimeout(() => useGame.getState().setHint(null), 11000);
+    setTimeout(() => useGame.getState().setHint('Click the world to capture the mouse · WASD move · LMB light · RMB heavy/block · F parry · E interact'), 900);
+    setTimeout(() => useGame.getState().setHint(null), 12000);
   }, []);
 
   /* ----------------------------------------------------------------- input */
@@ -182,6 +197,30 @@ export default function App() {
       </div>
     );
   };
+
+  if (fatal) {
+    return (
+      <div className="screen-center">
+        <div className="panel" style={{ width: 'min(640px, 92vw)' }}>
+          <div className="panel-title"><span>无法起程 · CANNOT START</span></div>
+          <div className="panel-body">
+            <p style={{ color: '#e8dcc4' }}>{fatal}</p>
+            <p className="dim" style={{ fontSize: 13, fontFamily: 'var(--ui-sans)', lineHeight: 1.8 }}>
+              Winds of Eternity needs WebGL2 and hardware acceleration. Try a recent Chrome, Edge,
+              Firefox or Safari on a desktop machine, make sure hardware acceleration is enabled in
+              the browser settings, and reload the page.
+            </p>
+            <div className="row" style={{ marginTop: 10 }}>
+              <button className="primary" onClick={() => { setFatal(null); useGame.getState().setScreen('menu'); }}>
+                Back to title
+              </button>
+              <button className="ghost" onClick={() => window.location.reload()}>Reload</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <>

@@ -94,6 +94,7 @@ export class Game {
   private tmp = new Vector3();
   private tmp2 = new Vector3();
   private accum = 0;
+  private frameErrors = 0;
 
   /* --------------------------------------------------------------- loading */
 
@@ -303,11 +304,17 @@ export class Game {
     this.lastTs = performance.now();
     const loop = (ts: number) => {
       if (!this.running) return;
+      // scheduled first so a single bad frame can never kill the loop
       this.raf = requestAnimationFrame(loop);
       let dt = (ts - this.lastTs) / 1000;
       this.lastTs = ts;
       if (dt > 0.1) dt = 0.1;
-      this.frame(dt);
+      try {
+        this.frame(dt);
+      } catch (e) {
+        this.frameErrors++;
+        if (this.frameErrors <= 5) console.error('[frame]', e);
+      }
     };
     this.raf = requestAnimationFrame(loop);
   }
