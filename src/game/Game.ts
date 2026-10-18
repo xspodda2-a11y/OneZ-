@@ -641,6 +641,9 @@ export class Game {
       toast('The post creaks. It has heard worse.', 'npc');
       return;
     }
+    // talking to someone advances any "speak with X" objective before we build
+    // the dialogue, so a finished task can be handed in in the same breath
+    this.quests.report('talk', npc.role, this.world.poiAt(npc.pos)?.id, 1);
     this.dialogueNpc = npc;
     const node = buildDialogue(npc, this);
     npc.npcState = 'talk';
@@ -662,6 +665,9 @@ export class Game {
         break;
       case 'quest:accept':
         this.quests.start(opt.data);
+        // the conversation in which the task was accepted also satisfies any
+        // opening "speak with ..." objective
+        if (npc) this.quests.report('talk', npc.role, this.world.poiAt(npc.pos)?.id, 1);
         st.setDialogue(null);
         this.dialogueNpc = null;
         this.refreshQuestUI();
@@ -882,8 +888,25 @@ export class Game {
         toast(`Loot: ${ITEMS[l.id as keyof typeof ITEMS]?.name ?? l.id} ×${qty}`, 'good');
       }
     }
-    this.quests.report('kill', e.def.kind, this.world.poiAt(e.pos)?.id, 1);
+    const poiId = this.world.poiAt(e.pos)?.id;
+    this.quests.report('kill', e.def.kind, poiId, 1);
+    if (e.def.boss) this.quests.report('boss', e.def.kind, poiId, 1);
     if (e.def.kind === 'bandit' || e.def.kind === 'swordsman') this.prog.addItem('banditToken', 1);
+    // Quest-critical items (a lost pendant, a sealed letter) must be obtainable:
+    // if an active objective is waiting on one, these enemies can carry it.
+    for (const { def, state } of this.quests.activeQuests()) {
+      const obj = def.objectives[state.objIndex];
+      if (!obj || obj.type !== 'collect') continue;
+      const item = ITEMS[obj.target as keyof typeof ITEMS];
+      if (!item || item.kind !== 'quest') continue;
+      if (this.prog.count(obj.target) >= obj.count) continue;
+      if (Math.random() < 0.35) {
+        this.prog.addItem(obj.target, 1);
+        this.quests.report('collect', obj.target, poiId, 1);
+        toast(`You recover: ${item.name} ${item.nameCN}`, 'quest');
+        this.audio.play('pickup');
+      }
+    }
     this.vfx.burst(e.pos.clone().add(new Vector3(0, 1, 0)), '#ffb066', 26, 3.4, 0.4, 1.0);
     this.audio.play('enemyDeath');
     if (e.bossBar) {

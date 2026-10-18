@@ -140,3 +140,12 @@ features and no placeholder buttons.
   character meshes; every merge site now normalises to non-indexed first.
 - Wall probing now requires a wall to be ≥1.5 m tall before the player can climb or wall-run,
   which stopped the character from scaling pebbles.
+- **"Speak with X" objectives could never be completed** — nothing ever reported a `talk`
+  event, so the main quest stalled the moment you accepted it. Opening a dialogue with an
+  NPC now reports the talk (and accepting a task satisfies the conversation you had to take
+  it), so hand-in happens in the same conversation that finishes the last objective.
+- **Boss objectives were unreachable** — a `boss` objective never matched the `kill` report
+  emitted on death. Boss kills now report both.
+- **Quest-critical items could not be found** (the jade pendant in *The Lost Pendant*). Enemy
+  deaths now check active `collect` objectives and let quest items drop, so story items can
+  never soft-lock a run.

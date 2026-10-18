@@ -21,6 +21,7 @@ import { QuestSystem } from '../src/game/quests/Quests';
 import { Progression } from '../src/game/rpg/Progression';
 import { AudioEngine } from '../src/game/audio/Audio';
 import { game } from '../src/game/Game';
+import { useGame } from '../src/state/store';
 import { input } from '../src/game/core/Input';
 import { bus, EV } from '../src/game/core/Events';
 import { heightAt, WORLD } from '../src/game/core/TerrainHeight';
@@ -282,6 +283,137 @@ async function main() {
     if (game.player.alive) throw new Error('player survived lethality');
     game.respawn();
     if (!game.player.alive || game.player.hp <= 0) throw new Error('respawn failed');
+  });
+
+  log('[10] quest completability audit');
+  check('every quest giver / turn-in NPC exists in the world', () => {
+    const lines: string[] = [];
+    for (const def of game.quests.all()) {
+      const giverOk = game.world.spawns.some((s) => s.kind === 'npc' && s.type === def.giver && (!def.giverPoi || s.poi === def.giverPoi));
+      const turnOk = game.world.spawns.some((s) => s.kind === 'npc' && s.type === def.turnIn && (!def.turnInPoi || s.poi === def.turnInPoi));
+      lines.push(`${def.id}: giver ${def.giver}@${def.giverPoi ?? 'any'}=${giverOk ? 'ok' : 'MISSING'} turnIn ${def.turnIn}@${def.turnInPoi ?? 'any'}=${turnOk ? 'ok' : 'MISSING'}`);
+      if (!giverOk) throw new Error(`quest ${def.id} giver ${def.giver}@${def.giverPoi} missing\n    ` + lines.join('\n    '));
+      if (!turnOk) throw new Error(`quest ${def.id} turn-in ${def.turnIn}@${def.turnInPoi} missing\n    ` + lines.join('\n    '));
+    }
+    log('    ' + lines.join('\n    '));
+  });
+  check('kill objectives have enough enemies in the world', () => {
+    const need: Record<string, number> = {};
+    for (const def of game.quests.all()) {
+      for (const o of def.objectives) {
+        if (o.type === 'kill') need[o.target] = Math.max(need[o.target] ?? 0, o.count);
+        if (o.type === 'boss') need[o.target] = Math.max(need[o.target] ?? 0, 1);
+      }
+    }
+    const have: Record<string, number> = {};
+    for (const s of game.world.spawns) {
+      if (s.kind === 'enemy' || s.kind === 'boss') have[s.type ?? s.kind] = (have[s.type ?? s.kind] ?? 0) + 1;
+    }
+    log(`    need=${JSON.stringify(need)} have=${JSON.stringify(have)}`);
+    for (const k in need) {
+      if ((have[k] ?? 0) < need[k]) throw new Error(`only ${have[k] ?? 0} "${k}" spawns for an objective needing ${need[k]}`);
+    }
+  });
+  check('POIs referenced by objectives exist', () => {
+    const ids = new Set(game.world.pois.map((p) => p.id));
+    for (const def of game.quests.all()) {
+      for (const o of def.objectives) {
+        if ((o.type === 'reach' || o.type === 'talk') && o.target.startsWith('poi:')) {
+          if (!ids.has(o.target.slice(4))) throw new Error(`quest ${def.id} needs missing POI ${o.target}`);
+        }
+      }
+      for (const p of [def.giverPoi, def.turnInPoi]) {
+        if (p && !ids.has(p)) throw new Error(`quest ${def.id} references missing POI ${p}`);
+      }
+    }
+    log(`    pois present: ${[...ids].join(', ')}`);
+  });
+  check('starting POI has NPCs to talk to and the boss exists', () => {
+    const willow = game.world.spawns.filter((s) => s.poi === 'willow' && s.kind === 'npc');
+    if (willow.length < 3) throw new Error('willow bend is under-populated');
+    if (!game.world.spawns.some((s) => s.kind === 'boss')) throw new Error('no boss spawn');
+    log(`    willow npcs=${willow.length}, boss=${game.world.spawns.find((s) => s.kind === 'boss')?.type}`);
+  });
+
+  log('[11] end-to-end quest playthrough (talk → accept → objectives → turn in)');
+  check('q1 can be accepted, advanced and handed to the elder for rewards', () => {
+    // fresh run so quest state is clean
+    game.newGame();
+    const spawn = game.world.spawns.find((s) => s.kind === 'npc' && s.type === 'elder' && s.poi === 'willow');
+    if (!spawn) throw new Error('no elder spawn');
+    const elder = new Npc(game, 'elder', spawn.pos.clone(), spawn.data ?? {});
+    game.npcs.push(elder);
+    game.entityGroup.add(elder.root);
+    game.player.pos.copy(elder.pos);
+
+    game.openDialogue(elder);
+    const offer = useGame.getState().dialogue;
+    if (!offer) throw new Error('no dialogue shown');
+    if (!offer.options.some((o) => o.action === 'quest:accept')) throw new Error('elder did not offer the quest');
+    log(`      offer: "${offer.text.slice(0, 60)}…"`);
+    game.chooseDialogue(offer.options.find((o) => o.action === 'quest:accept')!);
+    if (!game.quests.states['q1']) throw new Error('quest did not start');
+
+    const def = game.quests.def('q1')!;
+    log(`      objectives: ${def.objectives.map((o) => o.text).join(' | ')}`);
+    // objective 0 (speak with the elder) should already be satisfied by the chat
+    if (game.quests.states['q1'].objIndex !== 1) {
+      throw new Error(`first objective not satisfied by the conversation (objIndex=${game.quests.states['q1'].objIndex})`);
+    }
+    // objective 1: kill 4 bandits
+    for (let i = 0; i < 4; i++) {
+      const b = new Enemy(game, 'bandit', game.player.pos.clone().add(new Vector3(3 + i, 0, 0)), 1);
+      game.enemies.push(b);
+      b.takeDamage({ amount: 99999, source: game.player as any, poise: 9999 });
+    }
+    let stt = game.quests.states['q1'];
+    if (stt.objIndex !== 2) throw new Error(`kill stage did not advance (objIndex=${stt.objIndex}, progress=${stt.progress})`);
+    // final objective: walk back and report to the elder
+    game.openDialogue(elder);
+    stt = game.quests.states['q1'];
+    if (!stt.readyToTurnIn) throw new Error(`returning to the elder did not finish the quest (objIndex=${stt.objIndex}, progress=${stt.progress})`);
+
+    // hand it in (the turn-in conversation is already open)
+    const before = { xp: game.prog.stats.xp, gold: game.prog.gold, sp: game.prog.stats.skillPoints };
+    const turn = useGame.getState().dialogue;
+    if (!turn || !turn.options.some((o) => o.action === 'quest:complete')) throw new Error('elder did not offer the turn-in');
+    game.chooseDialogue(turn.options.find((o) => o.action === 'quest:complete')!);
+    const after = { xp: game.prog.stats.xp, gold: game.prog.gold, sp: game.prog.stats.skillPoints };
+    if (!game.quests.completed.has('q1')) throw new Error('quest not marked complete');
+    if (!(after.gold > before.gold)) throw new Error('no gold reward');
+    if (!(after.sp > before.sp)) throw new Error('no skill point reward');
+    log(`      rewards: +${after.gold - before.gold} gold, +${after.sp - before.sp} skill point, completed=${[...game.quests.completed].join(',')}`);
+    if (!game.quests.isAvailable(game.quests.def('q2')!)) throw new Error('next main quest did not unlock');
+  });
+
+  check('side quest s2 (kill → recover pendant → return) is completable', () => {
+    const spawn = game.world.spawns.find((s) => s.kind === 'npc' && s.type === 'merchant' && s.poi === 'willow');
+    if (!spawn) throw new Error('no merchant spawn');
+    const merch = new Npc(game, 'merchant', spawn.pos.clone(), spawn.data ?? {});
+    game.npcs.push(merch);
+    game.entityGroup.add(merch.root);
+    game.player.pos.copy(merch.pos);
+
+    game.openDialogue(merch);
+    const offer = useGame.getState().dialogue;
+    if (!offer || !offer.options.some((o) => o.action === 'quest:accept')) throw new Error('merchant offered nothing');
+    game.chooseDialogue(offer.options.find((o) => o.action === 'quest:accept')!);
+    if (!game.quests.states['s2']) throw new Error('s2 did not start');
+    // grind bandits until the pendant drops (quest-item pity rule)
+    let killed = 0;
+    while (game.prog.count('pendant') < 1 && killed < 40) {
+      const b = new Enemy(game, 'bandit', game.player.pos.clone().add(new Vector3(3, 0, 0)), 1);
+      game.enemies.push(b);
+      b.takeDamage({ amount: 99999, source: game.player as any, poise: 9999 });
+      killed++;
+    }
+    log(`      pendant recovered after ${killed} bandits (progress=${JSON.stringify(game.quests.states['s2'].progress)})`);
+    if (game.prog.count('pendant') < 1) throw new Error('pendant never dropped in 40 kills');
+    game.openDialogue(merch);
+    const turn = useGame.getState().dialogue;
+    if (!turn || !turn.options.some((o) => o.action === 'quest:complete')) throw new Error('merchant would not take the pendant back');
+    game.chooseDialogue(turn.options.find((o) => o.action === 'quest:complete')!);
+    if (!game.quests.completed.has('s2')) throw new Error('s2 not completed');
   });
 
   log('\n=== ' + (failures === 0 ? 'ALL CHECKS PASSED' : `${failures} CHECK(S) FAILED`) + ' ===\n');
