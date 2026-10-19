@@ -1,0 +1,38 @@
+{
+  "name": "winds-of-eternity",
+  "private": true,
+  "version": "1.0.0",
+  "description": "WINDS OF ETERNITY - an original browser-based 3D open-world Wuxia action RPG",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "npm run typecheck && npm run test:sim && npm run test:ui && npm run test:shaders",
+    "test:sim": "vite build --ssr tools/headless.ts --outDir .tmp --logLevel error && node .tmp/headless.js",
+    "test:ui": "vite build --ssr tools/ui-smoke.tsx --outDir .tmp --logLevel error && node .tmp/ui-smoke.js",
+    "test:shaders": "vite build --ssr tools/shader-check.ts --outDir .tmp --logLevel error && node .tmp/shader-check.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xspodda2-a11y/OneZ-.git"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "gsap": "^3.15.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "three": "^0.186.1",
+    "zustand": "^5.0.15"
+  },
+  "devDependencies": {
+    "@shaderfrog/glsl-parser": "^5.4.1",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@types/three": "^0.186.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.4"
+  }
+}
